@@ -7,6 +7,7 @@ import java.net.Socket;
 public class Main {
     private static volatile boolean running =true;
     public static void main(String[] args){
+
         try{
         ServerSocket serverSocket=new ServerSocket(8000);
         System.out.println("Started listening on port 8000");
@@ -25,6 +26,7 @@ public class Main {
         while(running){
             try {
                 Socket client = serverSocket.accept();
+                RequestHandler.handleRequest(client);
                 System.out.println("Request received from: " + client.getInetAddress());
                 client.close();
             } catch (IOException e) {
