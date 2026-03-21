@@ -3,8 +3,12 @@ package org.example;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.HashMap;
+import java.util.function.Function;
 
 public class Main {
+    private HashMap<String, Function<HttpRequest,HttpRequest>> endpoints;
+
     private static volatile boolean running =true;
     public static void main(String[] args){
 

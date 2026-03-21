@@ -2,9 +2,9 @@ package org.example;
 
 import java.io.*;
 import java.net.Socket;
-import java.util.Arrays;
 
 public class RequestHandler {
+
     public static void handleRequest(Socket socket){
         try{
             BufferedReader bufferedReader=new BufferedReader(new InputStreamReader(socket.getInputStream()));
