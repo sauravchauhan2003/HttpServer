@@ -49,4 +49,36 @@ public class HttpResponse {
     public void setBody(String body) {
         this.body = body;
     }
+    @Override
+    public String toString() {
+        StringBuilder response = new StringBuilder();
+
+        // Status Line
+        response.append(httpVersion)
+                .append(" ")
+                .append(status_code)
+                .append(" ")
+                .append(statusPhrase)
+                .append("\r\n");
+
+        // Headers
+        if (headers != null) {
+            for (Map.Entry<String, String> entry : headers.entrySet()) {
+                response.append(entry.getKey())
+                        .append(": ")
+                        .append(entry.getValue())
+                        .append("\r\n");
+            }
+        }
+
+        // Blank line to separate headers and body
+        response.append("\r\n");
+
+        // Body
+        if (body != null) {
+            response.append(body);
+        }
+
+        return response.toString();
+    }
 }

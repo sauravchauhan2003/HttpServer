@@ -2,6 +2,7 @@ package org.example;
 
 import java.io.*;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -9,6 +10,8 @@ public class RequestHandler {
 
     public static void handleRequest(Socket socket){
         try{
+            socket.setSoTimeout(30000); // 30 sec timeout
+
             BufferedReader bufferedReader = new BufferedReader(
                     new InputStreamReader(socket.getInputStream()));
             BufferedWriter bufferedWriter = new BufferedWriter(
@@ -18,8 +21,15 @@ public class RequestHandler {
                 StringBuilder stringBuilder = new StringBuilder();
                 String line;
 
-                while((line = bufferedReader.readLine()) != null && !line.isEmpty()){
-                    stringBuilder.append(line).append("\n");
+                try {
+                    // 🔥 READ HEADERS
+                    while((line = bufferedReader.readLine()) != null && !line.isEmpty()){
+                        stringBuilder.append(line).append("\n");
+                    }
+                } catch (SocketTimeoutException e) {
+                    // ✅ NORMAL: client idle, close connection
+                    System.out.println("Client idle timeout → closing connection");
+                    break;
                 }
 
                 // If no request, break
@@ -29,36 +39,67 @@ public class RequestHandler {
 
                 String rawRequest = stringBuilder.toString();
 
-                // 🔥 Pass raw request to parser
-                HttpRequest parsedRequest = parseRequest(rawRequest);
+                try{
+                    HttpRequest parsedRequest = parseRequest(rawRequest);
+                    System.out.println("RAW REQUEST:\n" + rawRequest);
 
-                System.out.println("RAW REQUEST:\n" + rawRequest);
+                    // 🔥 Check keep-alive from client
+                    boolean keepAlive = !"close".equalsIgnoreCase(
+                            parsedRequest.getHeaders().getOrDefault("Connection", "keep-alive")
+                    );
 
-                String response =
-                        "HTTP/1.1 200 OK\r\n" +
-                                "Content-Length: 13\r\n" +
-                                "Content-Type: text/plain\r\n" +
-                                "Connection: keep-alive\r\n" +
-                                "\r\n" +
-                                "Hello, World!";
+                    String response =
+                            "HTTP/1.1 200 OK\r\n" +
+                                    "Content-Length: 13\r\n" +
+                                    "Content-Type: text/plain\r\n" +
+                                    "Connection: " + (keepAlive ? "keep-alive" : "close") + "\r\n" +
+                                    "\r\n" +
+                                    "Hello, World!";
 
-                bufferedWriter.write(response);
-                bufferedWriter.flush();
+                    bufferedWriter.write(response);
+                    bufferedWriter.flush();
+
+                    // 🔥 If client wants to close → exit loop
+                    if(!keepAlive){
+                        break;
+                    }
+
+                }
+                catch (Exception e) {
+                    String response =
+                            "HTTP/1.1 400 Bad Request\r\n" +
+                                    "Content-Length: 11\r\n" +
+                                    "Content-Type: text/plain\r\n" +
+                                    "Connection: close\r\n" +
+                                    "\r\n" +
+                                    "Bad Request";
+
+                    bufferedWriter.write(response);
+                    bufferedWriter.flush();
+                    break;
+                }
             }
 
-            socket.close();
         }
         catch (Exception e){
+            // ❌ No more timeout noise here
             e.printStackTrace();
+        }
+        finally {
+            try {
+                socket.close();
+            } catch (IOException ignored) {}
         }
     }
 
     public static HttpRequest parseRequest (String request) throws Exception{
         HttpRequest request1 = new HttpRequest();
-        if(request==null||request.isEmpty()){
+
+        if(request == null || request.isEmpty()){
             throw new Exception("Empty request");
         }
-        String[] parts=request.split("\\r?\\n\\r?\\n",2);
+
+        String[] parts = request.split("\\r?\\n\\r?\\n", 2);
         String head = parts[0];
         String body = parts.length > 1 ? parts[1] : "";
 
@@ -67,11 +108,13 @@ public class RequestHandler {
         if (lines.length == 0) {
             throw new Exception("Malformed request: Missing request line");
         }
+
         String[] requestLine = lines[0].split(" ");
 
         if (requestLine.length != 3) {
             throw new Exception("Malformed request line");
         }
+
         request1.setPath(requestLine[1]);
         request1.setHttpVersion(requestLine[2]);
 
