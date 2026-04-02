@@ -14,10 +14,9 @@ public class Main {
 
         try{
         ServerSocket serverSocket=new ServerSocket(8000);
-        System.out.println("Started listening on port 8000");
 
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                System.out.println("\nShutting down server...");
+
                 running = false;
                 try {
                     if (!serverSocket.isClosed()) {
@@ -30,12 +29,13 @@ public class Main {
         while(running){
             try {
                 Socket client = serverSocket.accept();
-                RequestHandler.handleRequest(client);
-                System.out.println("Request received from: " + client.getInetAddress());
-                client.close();
+                Thread.startVirtualThread(()->{
+                    RequestHandler.handleRequest(client);
+                });
+
             } catch (IOException e) {
                 if (running) {
-                    System.out.println("Error: " + e.getMessage());
+
                 }
             }
 

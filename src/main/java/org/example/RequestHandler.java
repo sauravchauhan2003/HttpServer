@@ -28,7 +28,6 @@ public class RequestHandler {
                     }
                 } catch (SocketTimeoutException e) {
                     // ✅ NORMAL: client idle, close connection
-                    System.out.println("Client idle timeout → closing connection");
                     break;
                 }
 
@@ -41,7 +40,7 @@ public class RequestHandler {
 
                 try{
                     HttpRequest parsedRequest = parseRequest(rawRequest);
-                    System.out.println("RAW REQUEST:\n" + rawRequest);
+
 
                     // 🔥 Check keep-alive from client
                     boolean keepAlive = !"close".equalsIgnoreCase(
@@ -156,8 +155,6 @@ public class RequestHandler {
         } else {
             request1.setBody(body);
         }
-
-        System.out.println("Parsing request:\n" + request);
 
         return request1;
     }
