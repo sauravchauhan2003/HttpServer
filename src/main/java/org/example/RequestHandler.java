@@ -1,100 +1,171 @@
 package org.example;
 
 import java.io.*;
+import java.lang.reflect.Method;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
 public class RequestHandler {
 
-    public static void handleRequest(Socket socket){
-        try{
-            socket.setSoTimeout(30000); // 30 sec timeout
+    // ===== ROUTE STRUCT =====
+    static class Route {
+        Method method;
 
-            BufferedReader bufferedReader = new BufferedReader(
+        Route(Method method) {
+            this.method = method;
+        }
+    }
+
+    // ===== ROUTE MAP =====
+    private static Map<String, Route> routeMap = null;
+    private static final Controller controller = new Controller();
+
+    // ===== STATIC ROUTE BUILDER =====
+    public static Map<String, Route> buildRoutes() {
+        var methods = Controller.class.getDeclaredMethods();
+        var map = new HashMap<String, Route>();
+
+        for (var m : methods) {
+            if (m.isAnnotationPresent(Endpoint.class)) {
+                Endpoint e = m.getAnnotation(Endpoint.class);
+
+                // validate signature
+                if (m.getParameterCount() != 1 ||
+                        m.getParameterTypes()[0] != HttpRequest.class) {
+                    throw new RuntimeException("Invalid method: " + m.getName());
+                }
+
+                m.setAccessible(true);
+
+                // key = METHOD:PATH
+                String key = e.requesttype() + ":" + e.path();
+
+                map.put(key, new Route(m));
+            }
+        }
+
+        return map;
+    }
+
+    // ===== ENSURE ROUTES INITIALIZED =====
+    private static void ensureRoutes() {
+        if (routeMap == null) {
+            synchronized (RequestHandler.class) {
+                if (routeMap == null) {
+                    routeMap = buildRoutes();
+                }
+            }
+        }
+    }
+
+    // ===== MAIN HANDLER =====
+    public static void handleRequest(Socket socket) {
+        ensureRoutes(); // 🔥 important
+
+        try {
+            socket.setSoTimeout(30000);
+
+            BufferedReader reader = new BufferedReader(
                     new InputStreamReader(socket.getInputStream()));
-            BufferedWriter bufferedWriter = new BufferedWriter(
-                    new OutputStreamWriter(socket.getOutputStream()));
 
-            while(true){
-                StringBuilder stringBuilder = new StringBuilder();
+            OutputStream out = socket.getOutputStream();
+
+            while (true) {
+
+                StringBuilder requestBuilder = new StringBuilder();
                 String line;
 
                 try {
-                    // 🔥 READ HEADERS
-                    while((line = bufferedReader.readLine()) != null && !line.isEmpty()){
-                        stringBuilder.append(line).append("\n");
+                    // read headers
+                    while ((line = reader.readLine()) != null && !line.isEmpty()) {
+                        requestBuilder.append(line).append("\n");
                     }
                 } catch (SocketTimeoutException e) {
-                    // ✅ NORMAL: client idle, close connection
                     break;
                 }
 
-                // If no request, break
-                if(stringBuilder.isEmpty()){
-                    break;
-                }
+                if (requestBuilder.isEmpty()) break;
 
-                String rawRequest = stringBuilder.toString();
+                String rawRequest = requestBuilder.toString();
 
-                try{
+                try {
                     HttpRequest parsedRequest = parseRequest(rawRequest);
 
-
-                    // 🔥 Check keep-alive from client
                     boolean keepAlive = !"close".equalsIgnoreCase(
-                            parsedRequest.getHeaders().getOrDefault("Connection", "keep-alive")
+                            parsedRequest.getHeaders()
+                                    .getOrDefault("Connection", "keep-alive")
                     );
 
-                    String response =
-                            "HTTP/1.1 200 OK\r\n" +
-                                    "Content-Length: 13\r\n" +
-                                    "Content-Type: text/plain\r\n" +
-                                    "Connection: " + (keepAlive ? "keep-alive" : "close") + "\r\n" +
-                                    "\r\n" +
-                                    "Hello, World!";
+                    // ===== FAST ROUTING (O(1)) =====
+                    String key = parsedRequest.getRequestType() + ":" + parsedRequest.getPath();
+                    Route route = routeMap.get(key);
 
-                    bufferedWriter.write(response);
-                    bufferedWriter.flush();
+                    Object result = null;
 
-                    // 🔥 If client wants to close → exit loop
-                    if(!keepAlive){
-                        break;
+                    if (route != null) {
+                        result = route.method.invoke(controller, parsedRequest);
                     }
 
-                }
-                catch (Exception e) {
-                    String response =
+                    // ===== RESPONSE BUILD =====
+                    HttpResponse response = new HttpResponse();
+
+                    if (result == null) {
+                        response.setHttpVersion("HTTP/1.1");
+                        response.setStatus_code(404);
+                        response.setStatusPhrase("Not Found");
+                        response.setBody("Not Found");
+                    }
+                    else if (result instanceof HttpResponse) {
+                        response = (HttpResponse) result;
+                    }
+                    else {
+                        response.setHttpVersion("HTTP/1.1");
+                        response.setStatus_code(200);
+                        response.setStatusPhrase("OK");
+                        response.setBody(result.toString());
+                    }
+
+                    // headers
+                    Map<String, String> headers = new HashMap<>();
+                    headers.put("Content-Type", "text/plain");
+                    headers.put("Content-Length",
+                            String.valueOf(response.getBody() == null ? 0 : response.getBody().length()));
+                    headers.put("Connection", keepAlive ? "keep-alive" : "close");
+
+                    response.setHeaders(headers);
+
+                    // send
+                    out.write(response.toString().getBytes());
+                    out.flush();
+
+                    if (!keepAlive) break;
+
+                } catch (Exception e) {
+                    out.write((
                             "HTTP/1.1 400 Bad Request\r\n" +
                                     "Content-Length: 11\r\n" +
-                                    "Content-Type: text/plain\r\n" +
-                                    "Connection: close\r\n" +
-                                    "\r\n" +
-                                    "Bad Request";
-
-                    bufferedWriter.write(response);
-                    bufferedWriter.flush();
+                                    "Connection: close\r\n\r\n" +
+                                    "Bad Request").getBytes());
+                    out.flush();
                     break;
                 }
             }
 
-        }
-        catch (Exception e){
-            // ❌ No more timeout noise here
-            e.printStackTrace();
-        }
-        finally {
+        } catch (Exception ignored) {
+        } finally {
             try {
                 socket.close();
             } catch (IOException ignored) {}
         }
     }
 
-    public static HttpRequest parseRequest (String request) throws Exception{
-        HttpRequest request1 = new HttpRequest();
+    // ===== REQUEST PARSER =====
+    public static HttpRequest parseRequest(String request) throws Exception {
 
-        if(request == null || request.isEmpty()){
+        HttpRequest req = new HttpRequest();
+
+        if (request == null || request.isEmpty()) {
             throw new Exception("Empty request");
         }
 
@@ -104,58 +175,43 @@ public class RequestHandler {
 
         String[] lines = head.split("\r?\n");
 
-        if (lines.length == 0) {
-            throw new Exception("Malformed request: Missing request line");
-        }
-
         String[] requestLine = lines[0].split(" ");
 
         if (requestLine.length != 3) {
             throw new Exception("Malformed request line");
         }
 
-        request1.setPath(requestLine[1]);
-        request1.setHttpVersion(requestLine[2]);
+        req.setRequestType(RequestType.valueOf(requestLine[0]));
+        req.setPath(requestLine[1]);
+        req.setHttpVersion(requestLine[2]);
 
-        // 🔹 Parse Headers
         Map<String, String> headers = new HashMap<>();
 
         for (int i = 1; i < lines.length; i++) {
-            String line = lines[i];
+            String l = lines[i];
 
-            if (!line.contains(":")) {
-                throw new Exception("Malformed header: " + line);
+            if (!l.contains(":")) {
+                throw new Exception("Malformed header");
             }
 
-            String[] headerParts = line.split(":", 2);
-
-            String key = headerParts[0].trim();
-            String value = headerParts[1].trim();
-
-            headers.put(key, value);
+            String[] h = l.split(":", 2);
+            headers.put(h[0].trim(), h[1].trim());
         }
 
-        request1.setHeaders(headers);
+        req.setHeaders(headers);
 
-        // 🔹 Handle Body
         if (headers.containsKey("Content-Length")) {
-            int contentLength;
+            int len = Integer.parseInt(headers.get("Content-Length"));
 
-            try {
-                contentLength = Integer.parseInt(headers.get("Content-Length"));
-            } catch (NumberFormatException e) {
-                throw new Exception("Invalid Content-Length");
+            if (body.length() < len) {
+                throw new Exception("Incomplete body");
             }
 
-            if (body.length() < contentLength) {
-                throw new Exception("Body shorter than Content-Length");
-            }
-
-            request1.setBody(body.substring(0, contentLength));
+            req.setBody(body.substring(0, len));
         } else {
-            request1.setBody(body);
+            req.setBody(body);
         }
 
-        return request1;
+        return req;
     }
 }
