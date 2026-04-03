@@ -2,12 +2,11 @@ FROM eclipse-temurin:21-jre
 
 WORKDIR /app
 
-# Copy jar from target folder
-COPY target/*.jar app.jar
+# Copy your jar from exact location
+COPY src/main/java/org/example/app.jar app.jar
 
-# Fly.io requires dynamic port
 ENV PORT=8080
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "java -jar app.jar"]
+CMD ["java", "-jar", "app.jar"]
