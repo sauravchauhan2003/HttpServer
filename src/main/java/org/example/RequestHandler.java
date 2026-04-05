@@ -44,7 +44,7 @@ public class RequestHandler {
                 map.put(key, new Route(m));
             }
         }
-
+        routeMap=map;
         return map;
     }
 
